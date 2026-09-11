@@ -1,0 +1,14 @@
+{
+  "type": "record",
+  "name": "VitalSign",
+  "namespace": "com.miniproject.hospital",
+  "fields": [
+    {"name": "patient_id", "type": "string"},
+    {"name": "heart_rate", "type": "int"},
+    {"name": "spo2", "type": "float"},
+    {"name": "systolic_bp", "type": "int"},
+    {"name": "diastolic_bp", "type": "int"},
+    {"name": "temperature", "type": "float"},
+    {"name": "timestamp", "type": "string"}
+  ]
+}
