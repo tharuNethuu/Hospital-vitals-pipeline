@@ -1,0 +1,21 @@
+# Ingestion (Member A)
+confluent-kafka>=2.3
+fastavro>=1.9
+python-dotenv>=1.0
+
+# Processing (Spark 3.5 line = Databricks Runtime 14/15 LTS). Needs Java 17.
+pyspark==3.5.3
+
+# Storage / serving / observability
+psycopg2-binary>=2.9
+fastapi>=0.110
+uvicorn>=0.29
+
+# Tests
+pytest>=8.0
+httpx>=0.27
+
+# Orchestration: Apache Airflow is installed by the Docker image (apache/airflow:2.10.5).
+# For a non-Docker install on Linux/WSL, follow the official constraints-based install:
+#   pip install "apache-airflow==2.10.5" --constraint \
+#     "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.11.txt"
