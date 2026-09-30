@@ -1,0 +1,44 @@
+# Prometheus equivalents of observability/alert_rules.json, evaluated on the
+# metrics exported by GET /metrics of the serving API (storage/api.py).
+groups:
+  - name: hospital-pipeline
+    rules:
+      - alert: VitalsStreamStale
+        expr: hospital_vitals_last_ingest_age_seconds > 60 or absent(hospital_vitals_last_ingest_age_seconds)
+        for: 30s
+        labels: {severity: critical}
+        annotations:
+          summary: "No vitals readings stored in the last 60s (producer / Kafka / speed layer down)"
+
+      - alert: SpeedLayerDown
+        expr: hospital_speed_layer_heartbeat_age_seconds > 60
+        for: 30s
+        labels: {severity: critical}
+        annotations:
+          summary: "Speed-layer Spark driver stopped sending heartbeats"
+
+      - alert: BatchJobFailing
+        expr: hospital_batch_failure_ratio_30m > 0.2
+        labels: {severity: critical}
+        annotations:
+          summary: "More than 20% of batch-layer runs failed in the last 30 minutes"
+
+      - alert: BatchBacklog
+        expr: hospital_lab_files_pending > 2
+        for: 1m
+        labels: {severity: warning}
+        annotations:
+          summary: "Lab files are waiting for the batch layer"
+
+      - alert: WardAbnormalRateHigh
+        expr: hospital_vitals_abnormal_ratio_5m > 0.3
+        for: 1m
+        labels: {severity: warning}
+        annotations:
+          summary: "More than 30% of recent readings are abnormal"
+
+      - alert: HealthRuleBreached
+        expr: hospital_health_rule_breached == 1
+        labels: {severity: warning}
+        annotations:
+          summary: "Health-check rule {{ $labels.rule }} is breached"

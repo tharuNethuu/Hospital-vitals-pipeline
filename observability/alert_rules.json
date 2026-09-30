@@ -1,0 +1,77 @@
+{
+  "_comment": "Pipeline health rules evaluated by observability/health_check.py (every minute by the Airflow DAG pipeline_health_checks, or standalone). A rule is breached when `metric <op> threshold`. `threshold_simulated_days` scales with SIMULATED_DAY_SECONDS. `on_missing: breach` treats 'no data at all' as a breach (e.g. the stream never started).",
+  "rules": [
+    {
+      "name": "vitals_stream_stale",
+      "metric": "vitals_last_ingest_age_seconds",
+      "op": ">",
+      "threshold": 60,
+      "on_missing": "breach",
+      "severity": "critical",
+      "description": "No vitals reading stored in the last 60s - producer, Kafka or speed layer is down"
+    },
+    {
+      "name": "speed_layer_down",
+      "metric": "speed_layer_heartbeat_age_seconds",
+      "op": ">",
+      "threshold": 60,
+      "on_missing": "breach",
+      "severity": "critical",
+      "description": "Speed-layer driver has not reported a heartbeat in 60s - Spark job stopped or crashed"
+    },
+    {
+      "name": "live_summary_stale",
+      "metric": "live_summary_last_update_age_seconds",
+      "op": ">",
+      "threshold": 90,
+      "on_missing": "breach",
+      "severity": "warning",
+      "description": "Real-time serving view (vitals_live_summary) not updated in 90s"
+    },
+    {
+      "name": "lab_feed_stale",
+      "metric": "lab_feed_last_file_age_seconds",
+      "op": ">",
+      "threshold_simulated_days": 2.5,
+      "on_missing": "breach",
+      "severity": "warning",
+      "description": "No new lab results file for 2.5 simulated days - daily batch source is late"
+    },
+    {
+      "name": "batch_backlog",
+      "metric": "lab_files_pending",
+      "op": ">",
+      "threshold": 2,
+      "on_missing": "ok",
+      "severity": "warning",
+      "description": "More than 2 lab files are waiting for the batch layer - Airflow/batch job is falling behind"
+    },
+    {
+      "name": "batch_job_failing",
+      "metric": "batch_failure_ratio_30m",
+      "op": ">",
+      "threshold": 0.2,
+      "on_missing": "ok",
+      "severity": "critical",
+      "description": "More than 20% of batch-layer runs failed in the last 30 minutes"
+    },
+    {
+      "name": "data_quality_rejects_high",
+      "metric": "speed_layer_rejected_ratio",
+      "op": ">",
+      "threshold": 0.05,
+      "on_missing": "ok",
+      "severity": "warning",
+      "description": "More than 5% of consumed readings rejected as invalid - producer or schema problem"
+    },
+    {
+      "name": "ward_abnormal_rate_high",
+      "metric": "vitals_abnormal_ratio_5m",
+      "op": ">",
+      "threshold": 0.3,
+      "on_missing": "ok",
+      "severity": "warning",
+      "description": "More than 30% of readings in the last 5 minutes are abnormal (expected ~10%) - ward-wide event or faulty sensors"
+    }
+  ]
+}

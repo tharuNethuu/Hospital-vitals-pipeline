@@ -1,0 +1,140 @@
+# Hospital vitals pipeline - processing, storage/serving, orchestration and
+# observability layers. Ingestion runs on the host (Member A's simulators) and
+# Kafka is the team's Confluent Cloud cluster (credentials in .env).
+#
+#   docker compose build
+#   docker compose up -d                          # core stack
+#   docker compose --profile monitoring up -d     # + Prometheus on :9090
+#
+# Postgres: by default the bundled container. To use the team's Supabase
+# instead, set PG_HOST/PG_PORT/PG_DB/PG_USER/PG_PASSWORD/PG_SSLMODE in .env
+# (the bundled container then only stores Airflow's metadata).
+
+x-pipeline: &pipeline
+  image: hospital-vitals-pipeline:latest
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+  env_file:
+    - path: .env
+      required: false
+  volumes:
+    - .:/opt/pipeline
+  environment: &pipeline-env
+    PG_HOST: ${PG_HOST:-postgres}
+    PG_PORT: ${PG_PORT:-5432}
+    PG_DB: ${PG_DB:-hospital}
+    PG_USER: ${PG_USER:-hospital}
+    PG_PASSWORD: ${PG_PASSWORD:-hospital}
+    PG_SSLMODE: ${PG_SSLMODE:-prefer}
+    LAB_RESULTS_DIR: /opt/pipeline/lab_results_drops
+    REPORTS_DIR: /opt/pipeline/reports
+    CHECKPOINT_DIR: /opt/checkpoints
+    PIPELINE_HOME: /opt/pipeline
+    PYTHONPATH: /opt/pipeline
+    TZ: UTC
+  depends_on: &pipeline-deps
+    db-migrate:
+      condition: service_completed_successfully
+
+x-airflow-env: &airflow-env
+  <<: *pipeline-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://hospital:hospital@postgres:5432/airflow
+  AIRFLOW__CORE__DAGS_FOLDER: /opt/pipeline/orchestration/dags
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+  AIRFLOW__SCHEDULER__MIN_FILE_PROCESS_INTERVAL: "15"
+  AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "30"
+  AIRFLOW__WEBSERVER__SECRET_KEY: hospital-pipeline-local-only
+  AIRFLOW__WEBSERVER__WORKERS: "2"
+  AIRFLOW__LOGGING__LOGGING_LEVEL: INFO
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: hospital
+      POSTGRES_PASSWORD: hospital
+      POSTGRES_DB: hospital
+      TZ: UTC
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init/00-create-airflow-db.sql:/docker-entrypoint-initdb.d/00-create-airflow-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hospital -d hospital"]
+      interval: 5s
+      retries: 20
+
+  # Applies storage/schema.sql (idempotent) to whichever Postgres PG_* points at.
+  db-migrate:
+    <<: *pipeline
+    entrypoint: ["python", "-m", "storage.init_db"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  speed-layer:
+    <<: *pipeline
+    entrypoint: ["python", "-m", "processing.speed_layer_stream"]
+    volumes:
+      - .:/opt/pipeline
+      - checkpoints:/opt/checkpoints
+    restart: unless-stopped
+
+  api:
+    <<: *pipeline
+    entrypoint: ["python", "-m", "uvicorn", "storage.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  airflow-init:
+    <<: *pipeline
+    environment: *airflow-env
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >
+        airflow db migrate &&
+        airflow users create --role Admin --username admin --password admin
+        --firstname Admin --lastname User --email admin@example.com || true
+    restart: "no"
+
+  airflow-scheduler:
+    <<: *pipeline
+    environment: *airflow-env
+    command: scheduler
+    depends_on:
+      <<: *pipeline-deps
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  airflow-webserver:
+    <<: *pipeline
+    environment: *airflow-env
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      <<: *pipeline-deps
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    profiles: ["monitoring"]
+    volumes:
+      - ./observability/prometheus:/etc/prometheus:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  checkpoints:

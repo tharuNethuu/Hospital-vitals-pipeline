@@ -3,3 +3,12 @@ venv/
 __pycache__/
 *.pyc
 ingestion/lab_results_drops/
+# pipeline runtime artefacts
+checkpoints/
+reports/*
+!reports/.gitkeep
+spark-warehouse/
+metastore_db/
+derby.log
+.pytest_cache/
+lab_results_drops/lab_results_day*_17907*.csv

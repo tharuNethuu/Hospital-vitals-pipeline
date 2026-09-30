@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ward Vitals Monitor</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1c2330; --muted: #5d6778; --border: #dfe3ea;
+    --critical: #c62828; --critical-bg: #fdecea; --warning: #a15c00; --warning-bg: #fff4e0;
+    --ok: #1b7a3d; --ok-bg: #e7f5ec; --idle: #6b7280; --idle-bg: #eef0f3; --accent: #2457c5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #11151c; --panel: #1a2029; --text: #e6e9ef; --muted: #9aa4b5; --border: #2c3442;
+      --critical: #ff8a80; --critical-bg: #3a1d1d; --warning: #ffc266; --warning-bg: #3a2c14;
+      --ok: #7fd49b; --ok-bg: #16301f; --idle: #a0a7b4; --idle-bg: #252b35; --accent: #8ab4ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline;
+           padding: 16px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  h1 { font-size: 18px; margin: 0; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  .muted { color: var(--muted); }
+  main { padding: 16px; display: grid; gap: 16px; max-width: 1400px; margin: 0 auto; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .tile, .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .tile .label { color: var(--muted); font-size: 12px; }
+  .tile .value { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .grid2 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.wrap { white-space: normal; min-width: 180px; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .critical, .high { color: var(--critical); background: var(--critical-bg); }
+  .warning, .elevated_vitals, .elevated_labs { color: var(--warning); background: var(--warning-bg); }
+  .normal, .ok { color: var(--ok); background: var(--ok-bg); }
+  .no_signal, .none { color: var(--idle); background: var(--idle-bg); }
+  .bad { color: var(--critical); font-weight: 600; }
+  ul.list { list-style: none; margin: 0; padding: 0; }
+  ul.list li { padding: 6px 0; border-bottom: 1px solid var(--border); }
+  #error { display: none; color: var(--critical); background: var(--critical-bg); padding: 8px 12px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ward Vitals Monitor</h1>
+  <span class="muted">Lambda pipeline: speed view (live, ~10s) + batch view (daily risk report)</span>
+  <span class="muted" id="updated"></span>
+  <span id="health" class="pill none">health: ?</span>
+</header>
+<main>
+  <div id="error"></div>
+  <section class="tiles" id="tiles"></section>
+  <section class="grid2">
+    <div class="panel scroll">
+      <h2>Patients - right now</h2>
+      <table><thead><tr>
+        <th>Patient</th><th>Status</th><th>HR</th><th>SpO2</th><th>BP</th><th>Temp</th>
+        <th>30s window (avg HR / SpO2 / abn)</th><th>Last seen</th><th>Daily risk</th><th>Alert</th>
+      </tr></thead><tbody id="patients"></tbody></table>
+    </div>
+    <div class="panel">
+      <h2>Recent patient alerts</h2>
+      <ul class="list" id="alerts"></ul>
+      <h2 style="margin-top:16px">Pipeline health alerts</h2>
+      <ul class="list" id="pipeline"></ul>
+    </div>
+  </section>
+  <section class="panel scroll">
+    <h2 id="report-title">Daily consolidated risk report</h2>
+    <p class="muted" id="report-meta"></p>
+    <table><thead><tr>
+      <th>Patient</th><th>Risk</th><th>Vitals-only</th><th>Readings</th><th>Abnormal %</th>
+      <th>Avg HR</th><th>Avg SpO2</th><th>HR trend</th><th>Labs</th><th>Reasons</th>
+    </tr></thead><tbody id="report"></tbody></table>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const num = (v, d = 1) => (v === null || v === undefined) ? "-" : Number(v).toFixed(d);
+const pill = (cls, text) => `<span class="pill ${esc(cls)}">${esc(text ?? cls)}</span>`;
+const ago = (s) => s == null ? "-" : s < 90 ? `${Math.round(s)}s ago` : `${Math.round(s / 60)}m ago`;
+const time = (t) => t ? new Date(t.endsWith("Z") || t.includes("+") ? t : t + "Z").toLocaleTimeString() : "-";
+
+async function getJson(url) {
+  const r = await fetch(url);
+  if (!r.ok && r.status !== 404) throw new Error(`${url}: HTTP ${r.status}`);
+  return r.ok ? r.json() : null;
+}
+
+function renderTiles(w) {
+  const tiles = [
+    ["Patients monitored", w.patients_monitored],
+    ["Active (2 min)", w.active_patients],
+    ["Critical now", w.patients_critical, w.patients_critical > 0],
+    ["Warning now", w.patients_warning],
+    ["Readings (5 min)", w.readings_5m],
+    ["Abnormal (5 min)", w.abnormal_ratio_5m == null ? "-" : (w.abnormal_ratio_5m * 100).toFixed(0) + "%"],
+    ["Ward avg HR", num(w.avg_heart_rate_5m, 0)],
+    ["Ward avg SpO2", num(w.avg_spo2_5m)],
+  ];
+  $("tiles").innerHTML = tiles.map(([l, v, bad]) =>
+    `<div class="tile"><div class="label">${esc(l)}</div><div class="value ${bad ? "bad" : ""}">${esc(v ?? "-")}</div></div>`).join("");
+}
+
+function renderPatients(ps) {
+  $("patients").innerHTML = ps.map((p) => `<tr>
+    <td><b>${esc(p.patient_id)}</b></td>
+    <td>${pill(p.status, p.status.replace("_", " "))}</td>
+    <td class="${p.heart_rate < 60 || p.heart_rate > 100 ? "bad" : ""}">${esc(p.heart_rate)}</td>
+    <td class="${p.spo2 < 95 ? "bad" : ""}">${num(p.spo2)}</td>
+    <td>${esc(p.systolic_bp)}/${esc(p.diastolic_bp)}</td>
+    <td class="${p.temperature > 37.5 ? "bad" : ""}">${num(p.temperature)}</td>
+    <td>${num(p.avg_heart_rate, 0)} / ${num(p.avg_spo2)} / ${esc(p.window_abnormal_count ?? "-")}</td>
+    <td>${ago(p.seconds_since_last_reading)}</td>
+    <td>${p.latest_daily_risk ? pill(p.latest_daily_risk) : '<span class="muted">-</span>'}</td>
+    <td class="wrap">${esc(p.alert_reasons ?? "")}</td></tr>`).join("")
+    || `<tr><td colspan="10" class="muted">No readings yet - is the producer + speed layer running?</td></tr>`;
+}
+
+function renderAlerts(list) {
+  $("alerts").innerHTML = list.map((a) => `<li>${pill(a.severity)} <b>${esc(a.patient_id)}</b>
+      ${a.active ? "" : '<span class="muted">(ended)</span>'}<br>
+      <span class="muted">${time(a.first_window_start)} - ${time(a.last_window_end)} | ${esc(a.reasons)}</span></li>`).join("")
+    || `<li class="muted">No patient alerts.</li>`;
+}
+
+function renderPipeline(list) {
+  $("pipeline").innerHTML = list.map((a) => `<li>${pill(a.severity)} <b>${esc(a.rule_name)}</b><br>
+      <span class="muted">${esc(a.message)}</span></li>`).join("")
+    || `<li class="muted">No open pipeline alerts.</li>`;
+}
+
+function renderReport(r) {
+  if (!r) { $("report-meta").textContent = "No daily report yet - waits for the first lab file + Airflow batch run."; $("report").innerHTML = ""; return; }
+  $("report-title").textContent = `Daily consolidated risk report - simulated day ${r.report_day}`;
+  const counts = Object.entries(r.patients_by_risk).map(([k, v]) => `${k}: ${v}`).join(" | ");
+  $("report-meta").textContent = `${r.source_file} | vitals window ${time(r.window_start)} - ${time(r.window_end)} | ${counts}`
+    + ` | escalated by labs: ${r.escalated_by_labs.join(", ") || "none"} | newly flagged by labs: ${r.newly_flagged_by_labs.join(", ") || "none"}`;
+  $("report").innerHTML = r.patients.map((p) => `<tr>
+    <td><b>${esc(p.patient_id)}</b></td><td>${pill(p.risk_flag)}</td><td>${esc(p.vitals_only_risk)}</td>
+    <td>${esc(p.total_readings)}</td><td>${p.abnormal_ratio == null ? "-" : (p.abnormal_ratio * 100).toFixed(0) + "%"}</td>
+    <td>${num(p.avg_heart_rate, 0)}</td><td>${num(p.avg_spo2)}</td><td>${num(p.hr_trend_bpm_per_min)}</td>
+    <td class="wrap">${p.labs.map((l) => `<span class="${l.abnormal ? "bad" : ""}">${esc(l.test_type)} ${esc(l.result_value)}</span>`).join(", ") || "-"}</td>
+    <td class="wrap">${esc(p.risk_reasons)}</td></tr>`).join("");
+}
+
+async function refresh() {
+  try {
+    const [live, alerts, pipeline, report, health] = await Promise.all([
+      getJson("/api/ward/live"), getJson("/api/alerts?limit=12"),
+      getJson("/api/pipeline/alerts?status=open"), getJson("/api/reports/daily/latest"),
+      fetch("/health").then((r) => r.json()).catch(() => ({status: "down"})),
+    ]);
+    renderTiles(live.ward); renderPatients(live.patients); renderAlerts(alerts.alerts);
+    renderPipeline(pipeline.alerts); renderReport(report);
+    const cls = {ok: "ok", degraded: "warning", critical: "critical"}[health.status] || "critical";
+    $("health").className = `pill ${cls}`; $("health").textContent = `health: ${health.status}`;
+    $("updated").textContent = `updated ${new Date().toLocaleTimeString()}`;
+    $("error").style.display = "none";
+  } catch (e) {
+    $("error").textContent = `Cannot reach the serving API: ${e.message}`;
+    $("error").style.display = "block";
+  }
+}
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
